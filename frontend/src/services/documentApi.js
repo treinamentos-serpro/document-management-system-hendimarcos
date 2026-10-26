@@ -22,8 +22,15 @@ async function request(path, owner, options = {}) {
   return response;
 }
 
-export async function listDocuments(owner, signal) {
-  const response = await request('/documents', owner, { signal });
+export async function listDocuments(owner, signal, pagination) {
+  const query = new URLSearchParams();
+  if (pagination) {
+    query.set('limit', String(pagination.limit));
+    query.set('offset', String(pagination.offset));
+  }
+  const queryString = query.toString();
+  const path = `/documents${queryString ? `?${queryString}` : ''}`;
+  const response = await request(path, owner, { signal });
   const body = await response.json();
   return body.documents;
 }

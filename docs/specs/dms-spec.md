@@ -23,7 +23,7 @@ Entregar uma aplicação web que permita identificar um usuário, enviar documen
 - Armazenamento externo, em nuvem ou em banco de dados.
 - Versionamento, edição, exclusão, compartilhamento ou busca de documentos.
 - Persistência dos metadados após reinicialização do backend.
-- Restrições próprias da aplicação quanto ao tamanho ou ao tipo de arquivo.
+- Validação de tipo MIME ou conteúdo de arquivo.
 
 > **Limite importante:** o identificador `owner` é fornecido pelo cliente e serve para separar os documentos no contexto desta versão inicial. Ele não é uma credencial e não protege os documentos contra um cliente que informe o identificador de outra pessoa. A aplicação não deve ser apresentada como um sistema com isolamento seguro entre usuários enquanto não houver autenticação e autorização.
 
@@ -39,6 +39,7 @@ Entregar uma aplicação web que permita identificar um usuário, enviar documen
 | RF-06 | Um documento inexistente e um documento associado a outro `owner` devem produzir a mesma resposta `404`, sem revelar se o identificador existe. |
 | RF-07 | A interface deve apresentar confirmação após envio, permitir atualizar/consultar a lista e iniciar o download de cada documento listado. Deve apresentar uma mensagem compreensível quando uma operação falhar. |
 | RF-08 | Se o armazenamento do arquivo falhar, o backend não deve registrar metadados como se o envio tivesse sido concluído. Arquivos parciais criados pela tentativa devem ser removidos quando possível; falhas de limpeza devem ser registradas pelo backend. |
+| RF-09 | A listagem deve aceitar paginação opcional por `limit` e `offset`; sem esses parâmetros, deve preservar a resposta completa atual. |
 
 ### Fluxo principal
 
@@ -58,9 +59,10 @@ Entregar uma aplicação web que permita identificar um usuário, enviar documen
 | RNF-03 | A configuração operacional, como a porta do backend, deve usar variáveis de ambiente (`PORT`), respeitando o princípio 12-Factor. O caminho de armazenamento desta versão permanece `backend/storage`. |
 | RNF-04 | O backend deve usar Node.js e Express em CommonJS; o frontend deve usar React e Vite em ESM. O backend deve manter as camadas `routes/`, `controllers/`, `services/` e `repositories/`. |
 | RNF-05 | A comunicação do frontend deve usar `fetch` com o prefixo `/api`. No desenvolvimento, o proxy do Vite encaminha esse prefixo para os endpoints do backend, que são definidos sem `/api` (por exemplo, `/api/documents` no frontend para `/documents` no backend). |
-| RNF-06 | Esta fase não define limite de tamanho nem lista de tipos MIME permitidos pela aplicação. Isso não significa capacidade ilimitada: limites do processo, do filesystem, da infraestrutura ou do ambiente ainda podem interromper uma requisição. |
+| RNF-06 | O upload tem limite padrão de 25 MiB configurável por `MAX_UPLOAD_SIZE_BYTES`; não há validação de tipo MIME. O filesystem e a infraestrutura continuam sujeitos aos limites operacionais do ambiente. |
 | RNF-07 | O backend deve responder a falhas com status HTTP e formato de erro consistentes, sem retornar sucesso quando uma operação de arquivo ou metadados falhar. |
 | RNF-08 | A aplicação é destinada ao desenvolvimento/demonstração enquanto não existir autenticação. Não expor os endpoints como mecanismo de proteção de documentos entre usuários. |
+| RNF-09 | O nível dos logs deve ser configurável por `LOG_LEVEL`, com padrão `info`, sem registrar conteúdo de arquivos, nomes originais ou identificadores de dono. |
 
 ## 5. Modelo de dados
 
@@ -118,7 +120,8 @@ Envia um arquivo e cria os metadados do documento.
 - Um campo de arquivo chamado `file`.
 - Um arquivo por requisição.
 - Não enviar o dono como campo multipart; a fonte do valor é o cabeçalho `X-Owner-Id`.
-- Não há validação de tipo MIME ou limite de tamanho definido pela aplicação nesta fase.
+- O limite padrão é 25 MiB, configurável por `MAX_UPLOAD_SIZE_BYTES`; arquivos acima dele retornam `413 UPLOAD_TOO_LARGE`.
+- Não há validação de tipo MIME ou conteúdo do arquivo.
 
 **Sucesso — `201 Created`**
 
@@ -141,11 +144,13 @@ Envia um arquivo e cria os metadados do documento.
 | `400` | `OWNER_REQUIRED` | Cabeçalho ausente ou vazio. |
 | `400` | `FILE_REQUIRED` | Campo `file` ausente ou sem arquivo. |
 | `400` | `INVALID_MULTIPART` | Corpo multipart malformado ou incompatível com o contrato de arquivo único. |
+| `413` | `UPLOAD_TOO_LARGE` | O arquivo ultrapassa `MAX_UPLOAD_SIZE_BYTES`. |
 | `500` | `STORAGE_ERROR` | Falha inesperada ao gravar o arquivo ou registrar os metadados. Não retornar um documento criado. |
 
 ### `GET /documents`
 
 Lista os documentos associados ao dono informado. A lista deve ser ordenada do mais recente para o mais antigo por `uploadedAt`.
+Opcionalmente, `limit` (1 a 100) e `offset` permitem buscar uma página; sem parâmetros, a resposta continua contendo a coleção completa.
 
 **Cabeçalhos**
 
@@ -176,6 +181,7 @@ Sem documentos, retornar `200 OK` com `"documents": []`.
 | Status | Código | Condição |
 | --- | --- | --- |
 | `400` | `OWNER_REQUIRED` | Cabeçalho ausente ou vazio. |
+| `400` | `INVALID_PAGINATION` | `limit` ou `offset` não é um inteiro válido. |
 | `500` | `INTERNAL_ERROR` | Falha inesperada ao consultar os metadados. |
 
 ### `GET /documents/:id/download`
@@ -231,15 +237,18 @@ Fluxo de dependência: `routes -> controllers -> services -> repositories`.
 - Componentes funcionais com React Hooks, organizados em `components/`, `pages/` e `services/`.
 - Um serviço centraliza as chamadas `fetch` para a API.
 - A interface coleta o identificador usado em `X-Owner-Id`; essa entrada é apenas identificação de escopo, não login.
-- A tela deve distinguir estados de carregamento, lista vazia, sucesso e erro, sem duplicar lógica de comunicação nos componentes.
+- A tela deve distinguir estados de carregamento, lista vazia, sucesso e erro, sem duplicar lógica de comunicação nos componentes. Listagens longas devem ser buscadas em páginas.
 
 ### Armazenamento e configuração
 
 - O diretório padrão e obrigatório do projeto para arquivos é `backend/storage`, no filesystem local da aplicação.
 - Multer com `diskStorage` grava os arquivos; o nome original permanece somente nos metadados.
+- O repositório mantém os registros ordenados por dono para evitar filtrar e ordenar todo o mapa em cada listagem paginada.
+- `backend/storage` usa permissões restritas em sistemas POSIX; os nomes físicos são validados para permanecer dentro do diretório.
 - Metadados em memória são a fonte para listagem e resolução de `id` para arquivo durante a vida do processo.
 - Nesta fase, não reconstruir metadados a partir dos arquivos no disco após reinicialização. Arquivos remanescentes sem metadados são inacessíveis pela API e não são limpos automaticamente.
 - A porta do servidor é configurada por `PORT`, com valor padrão definido pelo backend. O frontend usa o proxy `/api` do Vite em desenvolvimento.
+- O tamanho máximo do upload e o nível de log podem ser configurados por `MAX_UPLOAD_SIZE_BYTES` e `LOG_LEVEL`.
 
 ## 8. Plano de execução
 

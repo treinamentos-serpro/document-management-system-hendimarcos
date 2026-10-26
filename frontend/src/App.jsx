@@ -3,25 +3,48 @@ import UploadComponent from './components/UploadComponent.jsx';
 import DocumentList from './components/DocumentList.jsx';
 import { listDocuments } from './services/documentApi.js';
 
+const pageSize = 50;
+
 function DocumentWorkspace({ owner }) {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState('');
+  const [loadMoreError, setLoadMoreError] = useState('');
   const [revision, setRevision] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
     setError('');
+    setLoadMoreError('');
 
     async function loadDocuments() {
       try {
-        const result = await listDocuments(owner, controller.signal);
-        if (!controller.signal.aborted) setDocuments(result);
+        const result = await listDocuments(owner, controller.signal, { limit: pageSize, offset: 0 });
+        if (!controller.signal.aborted) {
+          setDocuments(result);
+          setHasMore(result.length === pageSize);
+        }
       } catch (error) {
         if (!controller.signal.aborted) setError(error.message);
       } finally {
         if (!controller.signal.aborted) setLoading(false);
+      }
+    }
+
+    async function loadMoreDocuments() {
+      setLoadingMore(true);
+      setLoadMoreError('');
+      try {
+        const result = await listDocuments(owner, undefined, { limit: pageSize, offset: documents.length });
+        setDocuments((current) => [...current, ...result]);
+        setHasMore(result.length === pageSize);
+      } catch (error) {
+        setLoadMoreError(error.message);
+      } finally {
+        setLoadingMore(false);
       }
     }
 
@@ -41,8 +64,12 @@ function DocumentWorkspace({ owner }) {
         owner={owner}
         documents={documents}
         loading={loading}
+        loadingMore={loadingMore}
+        hasMore={hasMore}
         error={error}
+        loadMoreError={loadMoreError}
         onRefresh={refreshDocuments}
+        onLoadMore={loadMoreDocuments}
       />
     </>
   );

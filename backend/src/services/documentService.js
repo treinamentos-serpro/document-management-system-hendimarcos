@@ -1,4 +1,5 @@
 const { randomUUID } = require('node:crypto');
+const logger = require('../logger');
 
 class DocumentError extends Error {
   constructor(code, message, cause) {
@@ -24,7 +25,7 @@ function createDocumentService(repository) {
     try {
       await repository.removeFile(storageName);
     } catch (error) {
-      console.error('Falha ao remover arquivo de um upload não concluído.', error);
+      logger.error('upload.rollback.failed', { errorCode: error.code, errorName: error.name });
     }
   }
 
@@ -54,8 +55,8 @@ function createDocumentService(repository) {
       }
     },
 
-    async listDocuments(owner) {
-      const documents = await repository.listByOwner(normalizeOwner(owner));
+    async listDocuments(owner, pagination) {
+      const documents = await repository.listByOwner(normalizeOwner(owner), pagination);
       return documents.map(publicMetadata);
     },
 
